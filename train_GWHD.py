@@ -52,6 +52,7 @@ from torchvision.models.detection.image_list import ImageList
 from typing import List, Tuple
 
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class WheatDataset(Dataset):
     """A dataset example for GWC 2021 competition."""
 
@@ -68,17 +69,10 @@ class WheatDataset(Dataset):
         self.image_set = image_set
         self.image_path = root_dir+annotations["image_name"]
         self.boxes = [self.decodeString(item) for item in annotations["BoxesString"]]
-        self.domains_str = annotations['domain']
-        
-        if(image_set == 'train'):
-          self._domains = ('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17')
-        elif(image_set == 'val'):
-          self._domains = ('18', '19', '20', '21', '22', '23', '24', '25')
-        else:
-          self._domains = ('26', '27', '28', '29', '30', '31', '32', '33', '34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46')
-        
+        self.domains_str = annotations["domain"].astype(str)
+        self._domains = tuple(pd.unique(self.domains_str))
         self.num_domains = len(self._domains)
-        self._domain_to_ind = dict(zip(self._domains, range(len(self._domains))))
+        self._domain_to_ind = {domain: idx for idx, domain in enumerate(self._domains)}
         self.transform = transform
 
     def __len__(self):
@@ -89,6 +83,8 @@ class WheatDataset(Dataset):
         imgp = self.image_path[idx]
         bboxes = self.boxes[idx]
         img = cv2.imread(imgp)
+        if img is None:
+            raise FileNotFoundError(f"Could not read image: {imgp}")
         image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # Opencv open images in BGR mode by default
         
         try:
@@ -375,15 +371,14 @@ class DGFasterRCNN(LightningModule):
       
     def training_step(self, batch, batch_idx):
       
-      imgs = list(image.cuda() for image in batch[0]) 
-      #imgs = list(image for image in batch[0]) 
+      imgs = [image.to(device) for image in batch[0]]      #imgs = list(image for image in batch[0]) 
 
       targets = []
       for boxes, domain in zip(batch[1], batch[2]):
         target= {}
-        target["boxes"] = boxes.float().cuda()
+        target["boxes"] = boxes.float().to(device)
         #target["boxes"] = boxes.float()
-        target["labels"] = torch.ones(len(target["boxes"])).long().cuda()
+        target["labels"] = torch.ones(len(target["boxes"])).long().to(device)
         #target["labels"] = torch.ones(len(target["boxes"])).long()
         targets.append(target)
 
@@ -566,14 +561,14 @@ class DGFasterRCNN(LightningModule):
 
       elif total_gt == 0:
           if total_pred > 0:
-              return torch.tensor(0.).cuda()
+              return torch.tensor(0.).to(device)
           else:
-              return torch.tensor(1.).cuda()
+              return torch.tensor(1.).to(device)
       elif total_gt > 0 and total_pred == 0:
-          return torch.tensor(0.).cuda()
+          return torch.tensor(0.).to(device)
           
-tr_dataset = WheatDataset('../datasets/Annots/official_train.csv', root_dir='../datasets/gwhd_2021/images/', image_set = 'train', transform=train_transform)
-vl_dataset = WheatDataset('../datasets/Annots/official_val.csv', root_dir='../datasets/gwhd_2021/images/', image_set = 'val', transform=valid_transform)
+tr_dataset = WheatDataset('datasets/data/gwhd_2021/competition_train.csv', root_dir='datasets/data/gwhd_2021/images/', image_set='train', transform=train_transform)
+vl_dataset = WheatDataset('datasets/data/gwhd_2021/competition_val.csv', root_dir='datasets/data/gwhd_2021/images/', image_set='val', transform=valid_transform)
 val_dataloader = torch.utils.data.DataLoader(vl_dataset, batch_size=1, shuffle=False,  collate_fn=collate_fn, num_workers=4)
 
            
@@ -594,14 +589,18 @@ early_stop_callback= EarlyStopping(monitor='val_acc', min_delta=0.00, patience=1
 
 
 checkpoint_callback = ModelCheckpoint(monitor='val_loss', dirpath=NET_FOLDER, filename=weights_file)
-trainer = Trainer(gpus=1, progress_bar_refresh_rate=1, max_epochs=100, deterministic=False, callbacks=[checkpoint_callback, early_stop_callback], reload_dataloaders_every_n_epochs=1)
+trainer = Trainer(
+    max_epochs=100,
+    deterministic=False,
+    callbacks=[checkpoint_callback, early_stop_callback],
+    reload_dataloaders_every_n_epochs=1,
+)
 trainer.fit(detector, val_dataloaders=val_dataloader)
 
 
 detector.load_state_dict(torch.load(NET_FOLDER+'/'+weights_file+'.ckpt')['state_dict'])
 detector.freeze()
-test_dataset = WheatDataset('../datasets/Annots/official_test.csv', root_dir='../datasets/gwhd_2021/images/', image_set = 'test', transform=valid_transform)
-
+test_dataset = WheatDataset('datasets/data/gwhd_2021/competition_test.csv', root_dir='datasets/data/gwhd_2021/images/', image_set='test', transform=valid_transform)
 detector.detector.eval()
 test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, collate_fn=collate_fn, num_workers=4)
     
@@ -631,21 +630,21 @@ def acc_new(src_boxes, pred_boxes, iou_threshold = 1.):
 
       elif total_gt == 0:
           if total_pred > 0:
-              return torch.tensor(0.).cuda()
+              return torch.tensor(0.).to(device)
           else:
-              return torch.tensor(1.).cuda()
+              return torch.tensor(1.).to(device)
       elif total_gt > 0 and total_pred == 0:
-          return torch.tensor(0.).cuda()
+          return torch.tensor(0.).to(device)
           
 
-detector.to('cuda')
+detector.to(device)
 val_acc_stack = [[] for i in range(test_dataset.num_domains)]
 domain = torch.zeros(test_dataset.num_domains)
 for index, data_sample in enumerate(iter(test_dataloader)):
 
   images, boxes, labels, orig_img = data_sample
    
-  preds = detector(images.cuda())
+  preds = detector(images.to(device))
   
   preds[0]['boxes'] = preds[0]["boxes"].detach().cpu()
   preds[0]['labels'] = preds[0]["labels"].detach().cpu()
