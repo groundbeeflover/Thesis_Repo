@@ -1,0 +1,25 @@
+experiment_name: gwhd_baseline_seed42
+
+paths:
+  dataset_root: datasets/data/gwhd_2021
+  image_dir: datasets/data/gwhd_2021/images
+  train_csv: datasets/data/gwhd_2021/competition_train.csv
+  val_csv: datasets/data/gwhd_2021/competition_val.csv
+  test_csv: datasets/data/gwhd_2021/competition_test.csv
+  metadata_csv: datasets/data/gwhd_2021/metadata_dataset.csv
+  pretrained_checkpoint: checkpoints/pretrained/gwhd_best_prop.ckpt
+  output_root: outputs/runs
+
+model:
+  name: fasterrcnn
+
+training:
+  seed: 42
+  epochs: 50
+  batch_size: 4
+  learning_rate: 0.0001
+  num_workers: 4
+
+domain_generalization:
+  method: none
+  lambda: 0.0
